@@ -115,6 +115,9 @@
                         <div class="mt-6 border-t pt-4">
                             <p class="text-sm font-semibold">Thời gian còn lại:</p>
                             <p id="timer" class="text-2xl font-bold text-blue-700">120:00</p>
+                                <div class="mt-2 text-xs">
+                                    <p>Vi phạm: <span id="away-counter" class="text-red-600 font-bold">0</span>/5</p>
+                                </div>
                         </div>
                     </div>
                 </div>
@@ -165,6 +168,9 @@
         mediaRecorder: null,
         audioChunks: [],
         timerInterval: null,
+        awayCount: 0,
+        awayStartTime: null,
+        isTestActive: false,
     };
 
     const UI = {
@@ -419,6 +425,8 @@
         setupNavigation();
         renderQuestion();
         startTimer(120);
+        startTimer(120);
+        appState.isTestActive = true;
     };
     
     const startTimer = (minutes) => {
@@ -689,6 +697,7 @@
     const submitTest = async () => {
         // Removed confirm dialog as it can block execution in iframe environments.
         // The user's click on the submit button is considered confirmation.
+        appState.isTestActive = false;
         clearInterval(appState.timerInterval);
         showLoading('Đang chấm điểm. Việc này có thể mất một lúc...');
         await calculateAllScores();
@@ -739,18 +748,39 @@
     }
 
     function scoreSimpleMatch(sectionId, answerKey) {
-        const questions = appState.testData[sectionId] || [];
-        const userAnswers = appState.userAnswers[sectionId] || [];
-        if (questions.length === 0) return 0;
-        let correctCount = 0;
-        questions.forEach((q, i) => {
-            if (String(userAnswers[i] || "").trim() === String(q[answerKey] || "").trim()) {
-                correctCount++;
+    const questions = appState.testData[sectionId] || [];
+    const userAnswers = appState.userAnswers[sectionId] || [];
+    if (questions.length === 0) return 0;
+    let correctCount = 0;
+    
+    questions.forEach((q, i) => {
+        let correctAnswer = q[answerKey];
+        let userAnswer = userAnswers[i] || "";
+        
+        // Xử lý đặc biệt cho phần doc3 (Đọc hiểu đúng sai)
+        if (sectionId === 'doc3') {
+            // Chuẩn hóa đáp án đúng
+            if (correctAnswer === true || correctAnswer === "true" || correctAnswer === "对" || correctAnswer === "đúng") {
+                correctAnswer = "对";
+            } else if (correctAnswer === false || correctAnswer === "false" || correctAnswer === "错" || correctAnswer === "sai") {
+                correctAnswer = "错";
             }
-        });
-        return (correctCount / questions.length) * 100;
-    }
-
+            
+            // Chuẩn hóa đáp án người dùng
+            if (userAnswer === true || userAnswer === "true" || userAnswer === "对" || userAnswer === "đúng") {
+                userAnswer = "对";
+            } else if (userAnswer === false || userAnswer === "false" || userAnswer === "错" || userAnswer === "sai") {
+                userAnswer = "错";
+            }
+        }
+        
+        if (String(userAnswer).trim() === String(correctAnswer).trim()) {
+            correctCount++;
+        }
+    });
+    
+    return (correctCount / questions.length) * 100;
+}
     async function scoreWriting1_AI() {
         const questions = appState.testData['viet1'] || [];
         const userAnswers = appState.userAnswers['viet1'] || [];
@@ -907,6 +937,69 @@ Respond ONLY with a JSON object like {"pronunciation_accuracy": v1, "tone_accura
     UI.nextBtn.addEventListener('click', () => navigateQuestion(1));
     UI.submitBtn.addEventListener('click', submitTest);
     UI.restartBtn.addEventListener('click', resetApp);
+
+    // ===================================================================================
+    // Theo dõi rời khỏi trang
+    // ===================================================================================
+    document.addEventListener('visibilitychange', () => {
+        if (!appState.isTestActive) return;
+        
+        if (document.hidden) {
+            // Người dùng rời khỏi trang
+            appState.awayStartTime = Date.now();
+        } else {
+            // Người dùng quay lại trang
+            if (appState.awayStartTime) {
+                const awayDuration = Date.now() - appState.awayStartTime;
+                const awaySeconds = awayDuration / 1000;
+                
+                if (awaySeconds > 10) { // Nếu rời khỏi quá 10 giây
+                    appState.awayCount++;
+                    document.getElementById('away-counter').textContent = appState.awayCount;
+                    console.log(`Cảnh báo: Rời khỏi trang ${awaySeconds.toFixed(1)} giây. Lần thứ ${appState.awayCount}`);
+                    
+                    // Hiển thị cảnh báo
+                    alert(`Cảnh báo: Bạn đã rời khỏi trang trong ${awaySeconds.toFixed(1)} giây. Đây là lần thứ ${appState.awayCount}/5.`);
+                    
+                    // Tự động nộp bài nếu quá 5 lần
+                    if (appState.awayCount >= 5) {
+                        alert('Bạn đã rời khỏi trang quá nhiều lần. Bài thi sẽ được nộp tự động.');
+                        submitTest();
+                        return;
+                    }
+                }
+                appState.awayStartTime = null;
+            }
+        }
+    });
+
+    // Ngăn chặn một số cách thức gian lận khác
+    window.addEventListener('blur', () => {
+        if (!appState.isTestActive) return;
+        console.log('Cảnh báo: Cửa sổ mất focus');
+    });
+
+    // Ngăn chuột phải
+    document.addEventListener('contextmenu', (e) => {
+        if (appState.isTestActive) {
+            e.preventDefault();
+            return false;
+        }
+    });
+
+    // Ngăn một số phím tắt
+    document.addEventListener('keydown', (e) => {
+        if (!appState.isTestActive) return;
+        
+        // Ngăn F12, Ctrl+Shift+I, Ctrl+U
+        if (e.key === 'F12' || 
+            (e.ctrlKey && e.shiftKey && e.key === 'I') ||
+            (e.ctrlKey && e.key === 'u')) {
+            e.preventDefault();
+            alert('Chức năng này bị vô hiệu hóa trong khi làm bài thi.');
+            return false;
+        }
+    });
     </script>
 </body>
 </html>
